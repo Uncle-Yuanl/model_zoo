@@ -114,7 +114,7 @@ class MultiHeadAttention(Layer):
         kw = self.k_dense(k)
         vw = self.v_dense(v)
         # 形状变换
-        # 即时self.key_size != head_size， seq_len一致
+        # 即使self.key_size != head_size， seq_len一致
         qw = K.reshape(qw, (-1, K.shape(q)[1], self.heads, self.key_size))
         kw = K.reshape(kw, (-1, K.shape(k)[1], self.heads, self.key_size))
         vw = K.reshape(vw, (-1, K.shape(v)[1], self.heads, self.head_size))
@@ -130,6 +130,38 @@ class MultiHeadAttention(Layer):
             return [o, a]
         else:
             return o
+
+    def pay_attention_to(self, inputs, mask=None, **kwargs):
+        """实现标准的乘性多头注意力
+        单独实现可以方便子类定义不同形式的Attention
+
+        parameters:
+        -----------
+        inputs: list
+            q, k, v + tensor
+        mask: list
+            q, v的mask
+
+        returns:
+        --------
+        o: tensor
+            shape = (batch_size, seq_len, heads, head_size)
+        a: tensor
+            shape = (
+        """
+        (qw, kw, vw), n = inputs[:3], 3
+        q_mask, v_mask = mask
+        a_bias, p_bias = kwargs.get('a_bias'), kwargs.get('p_bias')
+        if a_bias:
+            # ----------？？？？-----------
+            a_bias = inputs[n]
+            n += 1
+        if p_bias == 'rotary':
+            # ----------------inputs的意义和维度，然后测试api--------------
+            cos_pos = K.repeat_elements(inputs[n][..., None, 1::2], 2, -1)
+            sin_pos = K.repeat_elements(inputs[n][..., None, ::2], 2, -1)
+            # ----------------还是先把论文看了吧---------------------------
+            qw2 = K.stack()
 
 
 custom_objects = {
