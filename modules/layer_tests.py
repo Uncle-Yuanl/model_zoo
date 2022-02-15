@@ -1,6 +1,6 @@
 import unittest
 
-from .layers import *
+from modules.layers import *
 
 class TestConcatenate1D(unittest.TestCase):
     a = tf.constant([[[1, 2, 3], [4, 5, 6], [7, 8, 9]]])

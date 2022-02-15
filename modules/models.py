@@ -5,7 +5,7 @@ from tensorflow.keras import Model
 import tensorflow.keras as keras
 import tensorflow.keras.backend as K
 
-from .layers import *
+from modules.layers import *
 
 
 class Transformer(object):
@@ -385,7 +385,7 @@ class Transformer(object):
             with tf.Session() as sess:
                 K.batch_set_value(zip(all_variables, all_values))
                 saver = tf.train.Saver()
-                saver.save(sess, filename)3
+                saver.save(sess, filename)
 
 
 
