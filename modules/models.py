@@ -267,6 +267,7 @@ class Transformer(object):
     def load_embeddings(self, embeddings):
         """处理Embedding层权重
         """
+        # -------------embeddings是数组吗？？--------------
         embeddings = embeddings.astype(K.floatx())
 
         if self.keep_tokens is not None:
