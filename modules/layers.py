@@ -4,6 +4,7 @@ import tensorflow.keras.backend as K
 from tensorflow.keras.layers import *
 from tensorflow.keras import initializers, activations
 
+from modules.backend import sequence_masking, recompute_grad
 
 
 # 父类不能直接是Layer，即时导入了
@@ -50,8 +51,8 @@ class MultiHeadAttention(Layer):
         self,
         heads,
         head_size,  # hidden_dim / heads？？
-        out_dim=None,  # ？？
-        key_size=None,  # ？？
+        out_dim=None,
+        key_size=None,  # q, k 的dimension
         use_bias=True,
         attention_scale=True,
         attention_dropout=None,
@@ -135,6 +136,11 @@ class MultiHeadAttention(Layer):
         """实现标准的乘性多头注意力
         单独实现可以方便子类定义不同形式的Attention
 
+        a_bias: 对attention矩阵的bias。
+                不同的attention bias对应不同的应用。
+        p_bias: 在attention里的位置偏置。
+                一般用来指定相对位置编码的种类。
+
         parameters:
         -----------
         inputs: list
@@ -156,12 +162,79 @@ class MultiHeadAttention(Layer):
             # ----------？？？？-----------
             a_bias = inputs[n]
             n += 1
+        # TODO(学习position bias，包括绝对与相对)
         if p_bias == 'rotary':
             # ----------------inputs的意义和维度，然后测试api--------------
             cos_pos = K.repeat_elements(inputs[n][..., None, 1::2], 2, -1)
             sin_pos = K.repeat_elements(inputs[n][..., None, ::2], 2, -1)
             # ----------------还是先把论文看了吧---------------------------
             qw2 = K.stack()
+            # ...
+            kw = kw * cos_pos + kw2 * sin_pos
+        # Attention
+        # d没了就是在d维度上累加，先将h转置到前面，然后批量地做('...jd,...dk->...,jk')
+        a = tf.einsum('bjhd,bkhd->bhjk', qw, kw)
+        # 处理位置编码
+        # --------------------两个都不懂？？-----------------------
+        if p_bias == 'typical_relative':
+            position_bias = inputs[n]
+            # expand_dim
+            a = a + tf.einsum('bjhd,jkd->bhjk', qw, position_bias)
+        if p_bias == 'T5_relative':
+            position_bias = K.permute_dimensions(inputs[n], (2, 0, 1))
+            # 加上batch_size的维度
+            a = a + K.expand_dims(position_bias, 0)
+        # Attention scale
+        if self.attention_scale:
+            a = a / self.key_size**0.5
+        if a_bias is not None:
+            a = a + a_bias
+        a = sequence_masking(a, v_mask, '-inf', -1)
+        A = K.softmax(a)
+        if self.attention_dropout:
+            A = Dropout(self.attention_dropout)(A)
+        # 完成输出
+        # 多一步转置，保证最后是(batch_size, seq_len, heads, head_size)
+        o = tf.einsum('bhjk,bkhd->bjhd', A, vw)
+        if p_bias == 'typical_relative':
+            o = o + tf.einsum('bhjk,jkd->bjhd', A, position_bias)
+        return o, a
+
+    def comput_output_shape(self, input_shape):
+        # -------------------确定下input_shape？？？？-------------------------------------
+        o_shape = (input_shape[0][0], input_shape[0][1], self.out_dim)
+        if self.return_attention_scores:
+            # ---------------这里heads又在前面了-----------------------
+            a_shape = (input_shape[0][0], self.heads, input_shape[0][1],input_shape[1][1])
+            return [o_shape, a_shape]
+        else:
+            return o_shape
+
+    def compute_mask(self, inputs, mask=None):
+        if mask is not None:
+            if self.return_attention_scores:
+                # -------------------干嘛用的，返回的应该是q_mask吧？？---------------------
+                return [mask[0], None]
+            else:
+                return mask[0]
+
+    def get_config(self):
+        config = {
+            'heads': self.heads,
+            'head_size': self.head_size,
+            'out_dim': self.out_dim,
+            'key_size': self.key_size,
+            'use_bias': self.use_bias,
+            'attention_scale': self.attention_scale,
+            'attention_dropout': self.attention_dropout,
+            'return_attention_scores': self.return_attention_scores,
+            'kernel_initializer': initializers.serialize(self.kernel_initializer)
+        }
+        base_config = super(MultiHeadAttention, self).get_config()
+        return dict(list(config.items()) + list(base_config.items()))
+
+
+
 
 
 custom_objects = {
