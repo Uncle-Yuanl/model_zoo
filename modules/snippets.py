@@ -14,7 +14,13 @@ if not is_py2:
 
 def orthogonally_resize(a, new_shape, window=2):
     """简单的正交化缩放矩阵
-    TODO(学习并记录笔记)
+
+    parameters:
+    -----------
+    window: int
+        控制复制时的批大小，不同维度同理
+        例如：window = 2, 4 -> 6 ==> [0,1,2,3] -复制-> [0,1,0,1,2,3,2,3] -截断-> [0,1,0,1,2,3]
+             window = 2, 4 -> 6 ==> [0,1,2,3] -复制-> [0,1,2,3,0,1,2,3] -截断-> [0,1,2,3,0,1]
     """
     assert a.ndim == len(new_shape)
     slices, a_norm, w = [], np.linalg.norm(a), window
@@ -26,7 +32,7 @@ def orthogonally_resize(a, new_shape, window=2):
             print('hit')
             k = d2 // d1 + int(d2 % d1 != 0)
             if k > 1:  # d2 > d1
-                # -----------------为什么有这样的强制限定？？--------------
+                # 强制约定d1是window的整倍数，否则无法reshape
                 assert d1 % window == 0
                 a = a.reshape(a.shape[:i] + (d1 // w, w) + a.shape[i + 1:])
                 # 先冗余复制
@@ -35,6 +41,7 @@ def orthogonally_resize(a, new_shape, window=2):
         slices.append(np.s_[:d2])
     # 然后用new_shape切片
     a = a[tuple(slices)]
+    # 与原范数相等
     return a / np.linalg.norm(a) * a_norm
 
 
