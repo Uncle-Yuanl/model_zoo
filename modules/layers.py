@@ -158,31 +158,35 @@ class MultiHeadAttention(Layer):
         (qw, kw, vw), n = inputs[:3], 3
         q_mask, v_mask = mask
         a_bias, p_bias = kwargs.get('a_bias'), kwargs.get('p_bias')
+        # --------------------看input[3:]的数据维度含义-----------------------
         if a_bias:
-            # ----------？？？？-----------
             a_bias = inputs[n]
             n += 1
         # TODO(学习position bias，包括绝对与相对)
         if p_bias == 'rotary':
-            # ----------------inputs的意义和维度，然后测试api--------------
+            # 公式链接：https://spaces.ac.cn/archives/8265
+            # inputs[n]是Sinusoidal位置编码，θi=10000^(−2i/d)
             cos_pos = K.repeat_elements(inputs[n][..., None, 1::2], 2, -1)
             sin_pos = K.repeat_elements(inputs[n][..., None, ::2], 2, -1)
-            # ----------------还是先把论文看了吧---------------------------
-            qw2 = K.stack()
-            # ...
+            # 为了缓解稀疏空间浪费问题，采用两个列向量(q * S)pairwise相乘，在相加
+            qw2 = K.stack(-qw[..., 1::2], qw[..., ::2], 4)
+            qw2 = K.reshape(qw2, K.shape(qw))
+            qw = qw * cos_pos + qw2 * sin_pos
+            kw2 = K.stack(-kw[..., 1::2], kw[..., ::2], 4)
+            kw2 = K.reshape(kw2, K.shape(kw))
             kw = kw * cos_pos + kw2 * sin_pos
         # Attention
         # d没了就是在d维度上累加，先将h转置到前面，然后批量地做('...jd,...dk->...,jk')
         a = tf.einsum('bjhd,bkhd->bhjk', qw, kw)
         # 处理位置编码
-        # --------------------两个都不懂？？-----------------------
         if p_bias == 'typical_relative':
             position_bias = inputs[n]
-            # expand_dim
+            #          WQ * Rij^T，公式中的xj被加和掉了。注意head紧跟在batch_size后面
+            # 注意position_bias没有batch_size维度，T5也是，那后面的k是啥
             a = a + tf.einsum('bjhd,jkd->bhjk', qw, position_bias)
         if p_bias == 'T5_relative':
             position_bias = K.permute_dimensions(inputs[n], (2, 0, 1))
-            # 加上batch_size的维度
+            # 加上batch_size的维度，广播？？？？
             a = a + K.expand_dims(position_bias, 0)
         # Attention scale
         if self.attention_scale:
@@ -204,7 +208,6 @@ class MultiHeadAttention(Layer):
         # -------------------确定下input_shape？？？？-------------------------------------
         o_shape = (input_shape[0][0], input_shape[0][1], self.out_dim)
         if self.return_attention_scores:
-            # ---------------这里heads又在前面了-----------------------
             a_shape = (input_shape[0][0], self.heads, input_shape[0][1],input_shape[1][1])
             return [o_shape, a_shape]
         else:
