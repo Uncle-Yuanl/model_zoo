@@ -1,4 +1,6 @@
 import unittest
+# import sys
+# sys.path.append('/home/yuanhao/model_zoo')
 
 from modules.layers import *
 
@@ -22,11 +24,15 @@ class TestConcatenate1D(unittest.TestCase):
         print(c1)
 
 
+class TestBERT(unittest.TestCase):
+    pass
+
+
 
 
 
 if __name__ == '__main__':
-    # unittest.main()
+    unittest.main()
     # 指定类运行单元测试
     class2run = [TestConcatenate1D]
 

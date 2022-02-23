@@ -6,6 +6,7 @@ import tensorflow.keras as keras
 import tensorflow.keras.backend as K
 
 from modules.layers import *
+from modules.snippets import *
 
 
 class Transformer(object):
@@ -130,7 +131,7 @@ class Transformer(object):
         inputs: tensor
             上一层的输出
         layer: class
-            要调用的层类名？？？？ 哪里导入的？？？？
+            Layer或其子类
         arguments:???
             传递给layer.call的参数
         kwargs: dict
@@ -202,11 +203,12 @@ class Transformer(object):
 
     def compute_attention_bias(self, inputs=None):
         """定义每次层的Attention Bias
+        inputs: Transformer的index
         """
         return self.attention_bias
 
     def compute_position_bias(self, inputs=None):
-        """定义每次层的P哦四通 Bias (一般相对位置编码用)
+        """定义每次层的Position Bias (一般相对位置编码用)
         """
         return self.position_bias
 
@@ -254,8 +256,8 @@ class Transformer(object):
 
     def simplify(self, inputs):
         """将list中的None过滤掉
-
-        干嘛用的？？？？
+        当inputs中有None时，表示期望的某个输入没有，但是为了不报错，自动过滤
+        例如在embedding输入时，position可能没有
         """
         inputs = [i for i in inputs if i is not None]
         if len(inputs) == 1:
@@ -386,6 +388,174 @@ class Transformer(object):
                 K.batch_set_value(zip(all_variables, all_values))
                 saver = tf.train.Saver()
                 saver.save(sess, filename)
+
+
+class BERT(Transformer):
+    """构建BERT模型
+    """
+    def __init__(
+        self,
+        max_position,  # 最大序列长度
+        segment_vocab_size=2,  # segment总数目  ？？？？
+        with_pool=False,  # 是否包含Pool部分
+        with_nsp=False,  # 是否包含NSP部分
+        with_mlm=False,  # 是否包含MLM部分
+        hierarchical_position=False,  # 是否层次分解位置编码，用于超长文本
+        custom_position_ids=None,  # 自行传入位置id  绝对相对？？？？
+        shared_segment_embeddings=False,  # 若True，segment和token公用embedding
+        **kwargs
+    ):
+        super(BERT, self).__init__(**kwargs)
+        self.max_position = max_position
+        self.segment_vocab_size = segment_vocab_size
+        self.with_pool = with_pool
+        self.with_nsp = with_nsp
+        self.with_mlm = with_mlm
+        self.hierarchical_position = hierarchical_position
+        self.custom_position_ids = custom_position_ids
+        self.shared_segment_embeddings = shared_segment_embeddings
+        # -------------why？--------------------
+        if self.with_nsp and not self.with_pool:
+            self.with_pool = True
+
+    def get_inputs(self):
+        """BERT的输入是token_ids和segment_ids
+        同时允许自行传入位置ids，以实现一些特殊需求
+        """
+        # 没有传入input关键字参数，更新字典后，直接返回实例
+        # 父类属性，为啥不用max_position？？？？
+        x_in = self.apply(
+            layer=Input, shape=(self.sequence_length, ), name='Input-Token'
+        )
+        inputs = [x_in]
+
+        if self.segment_vocab_size > 0:
+            s_in = self.apply(
+                layer=Input,
+                shape=(self.sequence_length, ),
+                name='Input-Segment'
+            )
+            inputs.append(s_in)
+
+        if self.custom_position_ids:
+            p_in = self.apply(
+                layer=Input,
+                shape=(self.sequence_length, ),
+                name='Input-Position'
+            )
+            inputs.append(p_in)
+
+        return inputs
+
+    def apply_embeddings(self, inputs):
+        """BERT的embedding是是token、position、segment三者embedding之和
+        """
+        inputs = inputs[:]
+        x = inputs.pop(0)
+        if self.segment_vocab_size > 0:
+            s = inputs.pop(0)
+        if self.custom_position_ids:
+            p = inputs.pop(0)
+        else:
+            p = None
+        # call函数中使用，build函数才会设计到
+        # layer_norm_cond[输入，units，activation]
+        # TODO(验证这里是将train中的参数传给inference吗？)
+        z = self.layer_norm_conds[0]
+
+        x = self.apply(
+            inputs=x,
+            layer=Embedding,
+            input_dim=self.vocab_size,
+            output_dim=self.embedding_size,
+            embeddings_initializer=self.initializer,  # @property
+            # https://tensorflow.google.cn/versions/r2.3/api_docs/python/tf/keras/layers/Embedding
+            mask_zero = True,  # 注意True时，后面需要mask，并且id=0有特殊含义，vocab对应增加
+            name='Embedding-Token'
+        )
+
+        if self.segment_vocab_size > 0:
+            if self.shared_segment_embeddings:
+                name = 'Embedding-Token'
+            else:
+                name = 'Embedding-Segment'
+            s = self.apply(
+                inputs=s,
+                layer=Embedding,
+                input_dim=self.segment_vocab_size,
+                output_dim=self.embedding_size,
+                embeddings_initializer=self.initializer,
+                name=name
+            )
+            x = self.apply(
+                inputs=[x, s],
+                layer=Add,
+                name='Embedding-Token-Segment'
+            )
+
+        x = self.apply(
+            inputs=self.simplify([x, p]),
+            # TODO(看)
+            layer=PositionEmbedding,
+            input_dim=self.max_position,
+            output_dim=self.embedding_size,
+            embeddings_initializer=self.initializer,
+            merge_mode='add',
+            hierarchical=self.hierarchical_position,
+            custom_position_ids=self.custom_position_ids,
+            name='Embedding-Position'
+        )
+
+        x = self.apply(
+            inputs=self.simplify([x, z]),
+            # TODO(看)
+            layer=LayerNormalization,
+            conditional=(z is not None),
+            hidden_units=self.layer_norm_conds[1],
+            hidden_activation=self.layer_norm_conds[2],
+            hidden_initializer=self.initializer,
+            name='Embedding-Norm'
+        )
+
+        x = self.apply(
+            inputs=x,
+            layer=Dropout,
+            rate=self.dropout_rate,
+            name='Embedding-Dropout'
+        )
+
+        if self.embedding_size != self.hidden_size:
+            x = self.apply(
+                inputs=x,
+                layer=Dense,
+                units=self.hidden_size,
+                kernel_initializer=self.initializer,
+                name='Embedding-Mapping'
+            )
+
+        return x
+
+    def apply_main_layers(self, inputs, index):
+        """BERT主体是基于self-attention模块
+        MulAtt -- Add&LN -- FFN -- Add&LN
+        """
+        x = inputs
+        z = self.layer_norm_conds[0]
+
+        attention_name = 'Transformer-%d-MultiHeadAttention' % index
+        feed_forward_name = 'Transformer-%d-FeedForward' % index
+        attention_mask = self.compute_attention_bias(index)
+
+        
+
+
+
+
+
+
+
+
+
 
 
 

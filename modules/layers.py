@@ -7,6 +7,10 @@ from tensorflow.keras import initializers, activations
 from modules.backend import sequence_masking, recompute_grad
 
 
+def integerize_shape(func):
+
+
+
 # 父类不能直接是Layer，即时导入了
 class Layer(tf.keras.layers.Layer):
     def __init__(self, **kwargs):
@@ -258,6 +262,7 @@ class FeedForward(Layer):
         self.use_bias = use_bias
         self.kernel_initializer = initializers.get(kernel_initializer)
 
+    @integerize_shape
     def build(self, input_shape):
         super(FeedForward, self).build(input_shape)
         output_dim = input_shape[-1]
