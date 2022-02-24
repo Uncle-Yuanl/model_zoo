@@ -132,8 +132,9 @@ class Transformer(object):
             上一层的输出
         layer: class
             Layer或其子类
-        arguments:???
+        arguments:
             传递给layer.call的参数
+            例如a_bias这种额外输入
         kwargs: dict
             传递给层初始化的参数
         """
@@ -171,7 +172,7 @@ class Transformer(object):
                     inputs = inputs[:1] + [k, v] + inputs[3:]
                 if self.residual_attention_scores:
                     # 如何使用残差Attention矩阵，则给每个Attention矩阵加上前上一层的Attention
-                    # 矩阵，这对应RealFormer设计（https://arxiv.org/abs/2012.11747）。
+                    # TODO(矩阵，这对应RealFormer设计（https://arxiv.org/abs/2012.11747）。)
                     # 目前该实现还相对粗糙，可能欠缺通用性。
                     if self.attention_scores is not None:
                         # 看一下arguments在call函数中是怎么起作用的？？？？
@@ -232,7 +233,7 @@ class Transformer(object):
         if len(inputs) > 1:
             self.input = inputs
         else:
-            # 这是干嘛？？保持维度吗？？
+            # 单输入就不用[]包住了
             self.input = inputs[0]
 
     def set_outputs(self, outputs):
@@ -261,7 +262,6 @@ class Transformer(object):
         """
         inputs = [i for i in inputs if i is not None]
         if len(inputs) == 1:
-            # 这里又符合正常逻辑了
             inputs = inputs[0]
 
         return inputs
@@ -269,7 +269,7 @@ class Transformer(object):
     def load_embeddings(self, embeddings):
         """处理Embedding层权重
         """
-        # -------------embeddings是数组吗？？--------------
+        # TODO(embeddings是数组吗？？)
         embeddings = embeddings.astype(K.floatx())
 
         if self.keep_tokens is not None:
@@ -311,7 +311,7 @@ class Transformer(object):
     def load_weights_from_checkpoint(self, checkpoint, mapping=None):
         """根据mapping从checkpoint加载权重
         """
-        # -----------------这个mapping是在哪里完成配置的？？------------------------
+        # TODO(这个mapping是在哪里完成配置的？？)
         mapping = mapping or self.variable_mapping()
         # 加上前缀
         mapping = {self.prefixed(k): v for k, v in mapping.items()}
@@ -321,7 +321,8 @@ class Transformer(object):
         weight_value_pairs = []
         for layer, variables in mapping.items():
             # layer: 层名， variables: checkpoint变量名
-            # ---------------------所以self.layers是怎么完成配置的？？----------------------------
+            # self.layers应在执行call函数时，各种apply时更新
+            # TODO(如果还没执行call函数怎么办？？)
             layer = self.layers[layer]
             weights, values = [], []
 
@@ -339,16 +340,15 @@ class Transformer(object):
                 if v is not None:
                     w_shape, v_shape = K.int_shape(w), v.shape
                     if self.autoresize_weights and w_shape != v_shape:
-                        # ----------------为什么是对v进行操作-------------------
+                        # TODO(为什么是对v进行操作？？)
                         v = orthogonally_resize(v, w_shape)
                         if isinstance(layer, MultiHeadAttention):
-                            # -------------这个count是啥----------------
                             count = 2
                             if layer.use_bias:
                                 count += 2
                             if layer.attention_scale and i < count:
                                 scale = 1.0 * w_shape[-1] / v_shape[-1]
-                                # 这里咋就4次方根
+                                # TODO(这里咋就4次方根？？)
                                 v = v * scale**0.25
                             if isinstance(layer, FeedForward):
                                 count = 1
@@ -359,11 +359,11 @@ class Transformer(object):
                                 if i < count:
                                     v *= np.sqrt(1.0 * w_shape[-1] / v_shape[-1])
                                 else:
-                                    # ----------------为什么这里选择第0维度--------------
+                                    # TODO(为什么这里选择第0维度？？)
                                     v *= np.sqrt((1.0 * w_shape[0]) / v_shape[0])
 
                     weight_value_pairs.append((w, v))
-        # ----------API学习，set完了模型的权重就更新了吗？？---------------
+        # TODO(API学习，set完了模型的权重就更新了吗？？)
         K.batch_set_value(weight_value_pairs)
 
     def save_weights_as_checkpoint(self, filename, mapping=None, dtype=None):
@@ -401,7 +401,7 @@ class BERT(Transformer):
         with_nsp=False,  # 是否包含NSP部分
         with_mlm=False,  # 是否包含MLM部分
         hierarchical_position=False,  # 是否层次分解位置编码，用于超长文本
-        custom_position_ids=None,  # 自行传入位置id  绝对相对？？？？
+        custom_position_ids=None,  # 自行传入位置id  ## TODO(绝对相对？？)
         shared_segment_embeddings=False,  # 若True，segment和token公用embedding
         **kwargs
     ):
@@ -414,7 +414,7 @@ class BERT(Transformer):
         self.hierarchical_position = hierarchical_position
         self.custom_position_ids = custom_position_ids
         self.shared_segment_embeddings = shared_segment_embeddings
-        # -------------why？--------------------
+        # NSP就是用[cls]向量预测的，则需要Pooler
         if self.with_nsp and not self.with_pool:
             self.with_pool = True
 
@@ -423,7 +423,7 @@ class BERT(Transformer):
         同时允许自行传入位置ids，以实现一些特殊需求
         """
         # 没有传入input关键字参数，更新字典后，直接返回实例
-        # 父类属性，为啥不用max_position？？？？
+        # TODO(父类属性，为啥不用max_position？？)
         x_in = self.apply(
             layer=Input, shape=(self.sequence_length, ), name='Input-Token'
         )
@@ -460,7 +460,7 @@ class BERT(Transformer):
             p = None
         # call函数中使用，build函数才会设计到
         # layer_norm_cond[输入，units，activation]
-        # TODO(验证这里是将train中的参数传给inference吗？)
+        # TODO(验证这里是将train中的参数传给inference吗？？)
         z = self.layer_norm_conds[0]
 
         x = self.apply(
@@ -508,7 +508,7 @@ class BERT(Transformer):
 
         x = self.apply(
             inputs=self.simplify([x, z]),
-            # TODO(看)
+            # TODO(Q: z是啥，训练过程保存的参数均值、方差吗？？)
             layer=LayerNormalization,
             conditional=(z is not None),
             hidden_units=self.layer_norm_conds[1],
@@ -546,7 +546,119 @@ class BERT(Transformer):
         feed_forward_name = 'Transformer-%d-FeedForward' % index
         attention_mask = self.compute_attention_bias(index)
 
-        
+        # Self Attention
+        xi, x, arguments = x, [x, x, x], {'a_bias': None}
+        if attention_mask is not None:
+            # TODO(mask == bias ？？)
+            arguments['a_bias'] = True
+            x.append(attention_mask)
+
+        x = self.apply(
+            inputs=x,
+            layer=MultiHeadAttention,
+            arguments=arguments,
+            heads=self.num_attention_heads,
+            head_size=self.attention_head_size,
+            out_dim=self.hidden_size,
+            key_size=self.attention_key_size,
+            attention_dropout=self.attention_dropout_rate,
+            kernel_initializer=self.initializer,
+            name=attention_name
+        )
+        x = self.apply(
+            inputs=x,
+            layer=Dropout,
+            rate=self.dropout_rate,
+            name='%s-Dropout' % attention_name
+        )
+        x = self.apply(
+            inputs=[xi, x], layer=Add, name='%s-Add' % attention_name
+        )
+        x = self.apply(
+            inputs=self.simplify([x, z]),
+            layer=LayerNormalization,
+            conditional=(z is not None),
+            hidden_units=self.layer_norm_conds[1],
+            hidden_activation=self.layer_norm_conds[2],
+            hidden_initializer=self.initializer,
+            name='%s-Norm' % attention_name
+        )
+
+        # FeedForward
+        xi = x
+        x = self.apply(
+            inputs=x,
+            layer=FeedForward,
+            units=self.intermediate_size,
+            activation=self.hidden_act,
+            kernel_initializer=self.initializer,
+            name=feed_forward_name
+        )
+        x = self.apply(
+            inputs=x,
+            layer=Dropout,
+            rate=self.dropout_rate,
+            name='%s-Dropout' % feed_forward_name
+        )
+        x = self.apply(
+            inputs=[xi, x], layer=Add, name='%s-Add' % feed_forward_name
+        )
+        x = self.apply(
+            inputs=self.simplify([x, z]),
+            layer=LayerNormalization,
+            conditional=(z is not None),
+            hidden_units=self.layer_norm_conds[1],
+            hidden_activation=self.layer_norm_conds[2],
+            hidden_initializer=self.initializer,
+            name='%s-Norm' % feed_forward_name
+        )
+
+        return x
+
+    def apply_final_layers(self, inputs):
+        """根据剩余参数决定输出
+        """
+        x = inputs
+        z = self.layer_norm_conds[0]
+        # 最基本的输出，给decoder的MultiHeadAttention
+        outputs = [x]
+
+        if self.with_pool:
+            # Pooler部分，提取[CLS]向量
+            x = outputs[0]
+            self.apply(
+                inputs=x,
+                layer=Lambda,
+                function=lambda x: x[:, 0],
+                name='Pooler'
+            )
+        pool_activation = 'tanh' if self.with_pool is True else self.with_pool
+        x = self.apply(
+            inputs=x,
+            layer=Dense,
+            uints=self.hidden_size,
+            activation=pool_activation,
+            kernel_initializer=self.initializer,
+            name='Pooler-Dense'
+        )
+        if self.with_nsp:
+            # Next Sentence Prediction部分
+            x = self.apply(
+                inputs=x,
+                layer=Dense,
+                units=2,
+                activation='softmax',
+                kernel_initializer=self.initializer,
+                name='NSP-Proba'
+            )
+        outputs.append(x)
+
+        if self.with_mlm:
+            # Masked Language Model部分
+            x = outputs[0]
+            x = self.apply(
+
+            )
 
 
 

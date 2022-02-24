@@ -73,7 +73,7 @@ class MultiHeadAttention(Layer):
         self.attention_scale = attention_scale
         self.attention_dropout = attention_dropout
         self.return_attention_scores = return_attention_scores
-        self.kernel_initializer = initializers.get(initializers)
+        self.kernel_initializer = initializers.get(kernel_initializer)
 
     def build(self, input_shape):
         super(MultiHeadAttention, self).build(input_shape)
