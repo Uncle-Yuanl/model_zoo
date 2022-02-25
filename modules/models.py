@@ -269,7 +269,8 @@ class Transformer(object):
     def load_embeddings(self, embeddings):
         """处理Embedding层权重
         """
-        # TODO(embeddings是数组吗？？)
+        # TODO(embeddings是数组吗？？加载试验)
+        # embeddings是checkpoint保存的变量
         embeddings = embeddings.astype(K.floatx())
 
         if self.keep_tokens is not None:
@@ -299,7 +300,7 @@ class Transformer(object):
         """
         dtype = dtype or K.floatx()
         return K.variable(
-            # 这里不是加了装饰器？应该不能再执行__call__()？？
+            # TODO(这里不是加了装饰器？应该不能再执行__call__()？？)
             self.initializer(value.shape, dtype), dtype, name
         ), value
 
@@ -657,8 +658,140 @@ class BERT(Transformer):
             # Masked Language Model部分
             x = outputs[0]
             x = self.apply(
-
+                inputs=x,
+                layer=Dense,
+                # TODO(why embedding_size？？)
+                units=self.embedding_size,
+                activation=self.hidden_act,
+                kernel_initializer=self.initializer,
+                name='MLM-Dense'
             )
+            x = self.apply(
+                inputs=self.simplify([x, z]),
+                layer=LayerNormalization,
+                conditional=(z is not None),
+                hidden_units=self.layer_norm_conds[1],
+                hidden_activation=self.layer_norm_conds[2],
+                hidden_initializer=self.initializer,
+                name='MLM-Norm'
+            )
+            # TODO(why Embedding？？)
+            x = self.apply(
+                inputs=x,
+                layer=Embedding,
+                arguments={'mode': 'dense'},
+                name='Embedding-Token'
+            )
+            # TODO(这个bias代表了啥，为什么单输入？？)
+            x = self.apply(inputs=x, layer=BiasAdd, name='MLM-Bias')
+            mlm_activation = 'softmax' if self.with_mlm is True else self.with_mlm
+            x = self.apply(
+                inputs=x,
+                layer=Activation,
+                activation=mlm_activation,
+                name='MLM-Activation'
+            )
+            outputs.append(x)
+
+        if len(outputs) == 1:
+            outputs = outputs[0]
+        elif len(outputs) == 2:
+            outputs = outputs[1]
+        else:
+            outputs = outputs[1:]
+
+        return outputs
+
+    def load_variable(self, checkpoint, name):
+        """加载单个变量
+        /连接的格式是BERT官方权重命名
+        """
+        variable = super(BERT, self).load_variable(checkpoint, name)
+        if name in [
+            'bert/embeddings/word_embeddings',
+            'cls/predictions/output_bias',
+        ]:
+            return self.load_embeddings(variable)
+        elif name == 'cls/seq_relationship/output_weights':
+            return variable.T
+        else:
+            return variable
+
+    def create_variable(self, name, value, dtype=None):
+        """在tensorflow中创建一个变量
+        """
+        if name == 'cls/seq_relationship/output_weights':
+            value = value.T
+        return super(BERT, self).create_variable(name, value, dtype)
+
+    def variable_mapping(self):
+        """映射到官方BERT权重格式
+        """
+        mapping = {
+            'Embedding-Token': ['bert/embeddings/word_embeddings'],
+            'Embedding-Segment': ['bert/embeddings/token_type_embeddings'],
+            'Embedding-Position': ['bert/embeddings/position_embeddings'],
+            'Embedding-Norm': [
+                'bert/embeddings/LayerNorm/beta',
+                'bert/embeddings/LayerNorm/gamma',
+            ],
+            'Embedding-Mapping': [
+                'bert/encoder/embedding_hidden_mapping_in/kernel',
+                'bert/encoder/embedding_hidden_mapping_in/bias',
+            ],
+            'Pooler-Dense': [
+                'bert/pooler/dense/kernel',
+                'bert/pooler/dense/bias',
+            ],
+            'NSP-Proba': [
+                'cls/seq_relationship/output_weights',
+                'cls/seq_relationship/output_bias',
+            ],
+            'MLM-Dense': [
+                'cls/predictions/transform/dense/kernel',
+                'cls/predictions/transform/dense/bias',
+            ],
+            'MLM-Norm': [
+                'cls/predictions/transform/LayerNorm/beta',
+                'cls/predictions/transform/LayerNorm/gamma',
+            ],
+            'MLM-Bias': ['cls/predictions/output_bias'],
+        }
+
+        for i in range(self.num_hidden_layers):
+            prefix = 'bert/encoder/layer_%d/' % i
+            mapping.update({
+                'Transformer-%d-MultiHeadSelfAttention' % i: [
+                    prefix + 'attention/self/query/kernel',
+                    prefix + 'attention/self/query/bias',
+                    prefix + 'attention/self/key/kernel',
+                    prefix + 'attention/self/key/bias',
+                    prefix + 'attention/self/value/kernel',
+                    prefix + 'attention/self/value/bias',
+                    prefix + 'attention/output/dense/kernel',
+                    prefix + 'attention/output/dense/bias',
+                ],
+                'Transformer-%d-MultiHeadSelfAttention-Norm' % i: [
+                    prefix + 'attention/output/LayerNorm/beta',
+                    prefix + 'attention/output/LayerNorm/gamma',
+                ],
+                'Transformer-%d-FeedForward' % i: [
+                    prefix + 'intermediate/dense/kernel',
+                    prefix + 'intermediate/dense/bias',
+                    prefix + 'output/dense/kernel',
+                    prefix + 'output/dense/bias',
+                ],
+                'Transformer-%d-FeedForward-Norm' % i: [
+                    prefix + 'output/LayerNorm/beta',
+                    prefix + 'output/LayerNorm/gamma',
+                ],
+            })
+
+        return mapping
+
+
+
+
 
 
 
