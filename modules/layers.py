@@ -8,7 +8,19 @@ from modules.backend import sequence_masking, recompute_grad
 
 
 def integerize_shape(func):
+    def convert(item):
+        if hasattr(item, '__iter__'):
+            return [convert(i) for i in item]
+        elif hasattr(item, 'value'):
+            return item.value
+        else:
+            return item
 
+    def new_func(self, input_shape):
+        input_shape = convert(input_shape)
+        return func(self, input_shape)
+
+    return new_func
 
 
 # 父类不能直接是Layer，即时导入了
@@ -16,6 +28,124 @@ class Layer(tf.keras.layers.Layer):
     def __init__(self, **kwargs):
         super(Layer, self).__init__(**kwargs)
         self.supports_masking = True  # 本项目的自定义层均可mask
+
+
+# TODO(这样condition)
+class ScaleOffset(Layer):
+    """简单的仿射变换层（最后一维乘上gamma向量并加上beta向量）
+    说明：1、具体操作为最后一维乘上gamma向量，并加上beta向量；
+         2、如果直接指定scale和offset，那么直接常数缩放和平移；
+         3、hidden_*系列参数仅为有条件输入时（conditional=True）使用，
+            用于通过外部条件控制beta和gamma。
+    """
+    def __init__(
+        self,
+        scale=True,
+        offset=True,
+        conditional=False,
+        hidden_units=None,
+        hidden_activation='linear',
+        hidden_initializer='glorot_uniform',
+        **kwargs
+    ):
+        super(ScaleOffset, self).__init__(**kwargs)
+        self.scale = scale
+        self.offset = offset
+        self.conditional = conditional
+        self.hidden_units = hidden_units
+        self.hidden_activation = activations.get(hidden_activation)
+        self.hidden_initializer = initializers.get(hidden_initializer)
+
+    @integerize_shape
+    def build(self, input_shape):
+        super(ScaleOffset, self).build(input_shape)
+
+        # TODO(为什么有conditional的区别)
+        if self.conditional:
+            input_shape = input_shape[0]
+
+        if self.offset is True:
+            # TODO(1、keras.layers.Layer的类方法)
+            self.beta = self.add_weight(
+                name='beta', shape=input_shape[-1], initializer='zeros'
+            )
+        if self.scale is True:
+            self.gamma = self.add_weight(
+                name='gamma', shape=input_shape[-1], initializer='ones'
+            )
+        if self.conditional:
+
+            if self.hidden_units is not None:
+                self.hidden_dense = Dense(
+                    units=self.hidden_units,
+                    activation=self.hidden_activation,
+                    use_bias=False,
+                    kernel_initializer=self.hidden_initializer
+                )
+
+            if self.offset is not False and self.offset is not None:
+                self.beta_dense = Dense(
+                    units=input_shape[-1],
+                    use_bias=False,
+                    kernel_initializer='zeros'
+                )
+            if self.scale is not False and self.scale is not None:
+                self.gamma_dense = Dense(
+                    units=input_shape[-1],
+                    use_bias=False,
+                    # ---------为啥又是0了？？--------
+                    kernel_initializer='zeros'
+                )
+
+    def compute_mask(self, inputs, mask=None):
+        # tf2.7源码：https://github.com/keras-team/keras/blob/v2.8.0/keras/engine/base_layer.py#L959-L979
+        # 区别是自定义的Layer都支持mask
+        if self.conditional:
+            return mask if mask is None else mask[0]
+        else:
+            return mask
+
+    @recompute_grad
+    def call(self, inputs):
+        if self.conditional:
+            # TODO(conds到底是什么？？同CLN)
+            inputs, conds = inputs
+            if self.hidden_units is not None:
+                conds = self.hidden_dense(conds)
+            conds = align(conds, [0, -1], K.ndim(inputs))
+
+        if self.scale is not False and self.scale is not None:
+            # 允许直接传入scale作为gamma向量
+            gamma = self.gamma if self.scale is True else self.scale
+            if self.conditional:
+                gamma = gamma + self.gamma_dense(conds)
+            inputs = inputs * gamma
+
+        if self.offset is not False and self.offset is not None:
+            beta = self.beta if self.offset is True else self.offset
+            if self.conditional:
+                beta = beta + self.beta_dense(conds)
+            inputs = inputs + beta
+
+        return inputs
+
+    def compute_output_shape(self, input_shape):
+        if self.conditional:
+            return input_shape[0]
+        else:
+            return input_shape
+
+    def get_config(self):
+        config = {
+            'scale': self.scale,
+            'offset': self.offset,
+            'conditional': self.conditional,
+            'hidden_units': self.hidden_units,
+            'hidden_activation': activations.serialize(self.hidden_activation),
+            'hidden_initializer': initializers.serialize(self.hidden_initializer),
+        }
+        base_config = super(ScaleOffset, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
 
 class Concatenate1D(Layer):
