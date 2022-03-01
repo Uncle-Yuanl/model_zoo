@@ -682,8 +682,8 @@ class BERT(Transformer):
                 arguments={'mode': 'dense'},
                 name='Embedding-Token'
             )
-            # TODO(这个bias代表了啥，为什么单输入？？)
-            x = self.apply(inputs=x, layer=BiasAdd, name='MLM-Bias')
+            # TODO(这这一步使用仿射变换为啥？？)
+            x = self.apply(inputs=x, layer=ScaleOffset, name='MLM-Bias')
             mlm_activation = 'softmax' if self.with_mlm is True else self.with_mlm
             x = self.apply(
                 inputs=x,
