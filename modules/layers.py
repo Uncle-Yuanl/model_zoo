@@ -371,10 +371,87 @@ class MultiHeadAttention(Layer):
         return dict(list(config.items()) + list(base_config.items()))
 
 
+# TODO(为什么会继承ScaleOffset？？也就是看call函数最后的super)
+class LayerNormalization(ScaleOffset):
+    """(cnditional) Layer Normalization
+    """
+    def __init__(
+        self,
+        zero_mean=True,
+        unit_variance=True,
+        epsilon=None,
+        **kwargs
+    ):
+        super(LayerNormalization, self).__init__(**kwargs)
+        self.zero_mean = zero_mean
+        self.unit_variance = unit_variance
+        self.epsilon = epsilon or 1e-12
+
+    @recompute_grad
+    def call(self, inputs):
+        """如果是Conditional LayerNormalization，则默认以list为输入，第二个是条件
+        """
+        if self.conditional:
+            inputs, conds = inputs
+
+        if self.zero_mean:
+            mean = K.mean(inputs, axis=-1, keepdims=True)
+            inputs = inputs - mean
+        if self.unit_variance:
+            variance = K.mean(K.square(inputs), axis=-1, keepdims=True)
+            inputs = inputs / K.sqrt(variance + self.epsilon)
+
+        if self.conditional:
+            inputs = [inputs, conds]
+
+        return super(LayerNormalization, self).call(inputs)
+
+    def get_config(self):
+        config = {
+            'zero_mean': self.zero_mean,
+            'unit_variance': self.unit_variance
+        }
+        base_config = super(LayerNormalization, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
+class PositionEmbedding(Layer):
+    """定义可训练的位置Embedding
+    """
+    def __int__(
+        self,
+        input_dim,
+        output_dim,
+        merge_mode='add',
+        hierarchical=None,
+        embeddings_initializer='zeros',
+        custom_position_ids=False,
+        **kwargs
+    ):
+        super(PositionEmbedding, self).__init__(**kwargs)
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.merge_mode = merge_mode
+        self.hierarchical = hierarchical
+        self.embeddings_initializer = initializers.get(embeddings_initializer)
+        self.custom_position_ids = custom_position_ids
+
+    def build(self, input_shape):
+        super(PositionEmbedding, self).build(input_shape)
+        self.embedding = self.add_weight(
+            name='embedding',
+            shape=(self.input_dim, self.output_dim),
+            initializer=self.embeddings_initializer
+        )
+
+    def call(self, inputs):
+
+
+
 class FeedForward(Layer):
     """FeedForward层
     如果activation不是一个list，那么它就是两个Dense层叠加；否则第一个Dense层将会被替换成门控线性单元（Gated Linear Unit）
-    论文：https://arxiv.org/abs/2002.05202
+    TODO(论文：https://arxiv.org/abs/2002.05202)
     """
     def __init__(
         self,
