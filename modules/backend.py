@@ -6,11 +6,24 @@ import tensorflow.keras.backend as K
 
 from tensorflow.python.util import nest, tf_inspect
 from tensorflow.python.eager import tape
-from tensorflow.python.ops.custom_gradient import _graph_mode_decorator
+from tensorflow.python.ops.custom_gradient import graph_mode_decorator
 
 
 # 是否使用重计算
 do_recompute = strtobool(os.environ.get('RECOMPUTE', '0'))
+
+
+def align(tensor, axes, ndim=None):
+    """重新对齐tensor（批量版expand_dims）感觉更像是transpose
+    axes: 原来的第i维对齐新tensor的第axes[i]维；
+    ndim: 新tensor的维度
+    """
+    assert len(axes) == K.ndim(tensor)
+    indices = [None] * (ndim or max(axes))
+    for i in axes:
+        # TODO(1、slice看笔记再确认，并且参考tf将examples写进注释)
+        indices[i] = slice(None)
+    return tensor[indices]
 
 
 def sequence_masking(x, mask, value=0, axis=None):
