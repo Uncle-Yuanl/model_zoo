@@ -4,7 +4,7 @@ import tensorflow.keras.backend as K
 from tensorflow.keras.layers import *
 from tensorflow.keras import initializers, activations
 
-from modules.backend import sequence_masking, recompute_grad
+from modules.backend import sequence_masking, recompute_grad, align
 
 
 def integerize_shape(func):
@@ -420,7 +420,7 @@ class PositionEmbedding(Layer):
     """
     def __int__(
         self,
-        input_dim,
+        input_dim,  # 预训练时的最大长度，bert=512
         output_dim,
         merge_mode='add',
         hierarchical=None,
@@ -458,8 +458,8 @@ class PositionEmbedding(Layer):
             position_ids = K.arange(0, seq_len, dtype='int32')[None]
 
         if self.hierarchical:
-            # TODO(看科学空间，并记录笔记在onenote)
             alpha = 0.4 if self.hierarchical is True else self.hierarchical
+            # 为了保证前self.input_dim维度(id // self.input_dim == 0)的embedding不变
             embeddings = self.embeddings - alpha * self.embeddings[:1]
             embeddings = embeddings / (1 - alpha)
             embeddings_x = K.gather(embeddings, position_ids // self.input_dim)
