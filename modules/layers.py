@@ -438,14 +438,71 @@ class PositionEmbedding(Layer):
 
     def build(self, input_shape):
         super(PositionEmbedding, self).build(input_shape)
-        self.embedding = self.add_weight(
+        self.embeddings = self.add_weight(
             name='embedding',
             shape=(self.input_dim, self.output_dim),
             initializer=self.embeddings_initializer
         )
 
     def call(self, inputs):
+        """如果custom_position_ids，那么第二个输入为自定义的id
+        """
+        if self.custom_position_ids:
+            inputs, position_ids = inputs
+            if 'int' not in K.type(position_ids):
+                position_ids = K.cast(position_ids, 'int32')
+        else:
+            input_shape = K.shape(inputs)
+            batch_size, seq_len = input_shape[0], input_shape[1]
+            # [None]: (seq_len,) --> (1, seq_len)，广播
+            position_ids = K.arange(0, seq_len, dtype='int32')[None]
 
+        if self.hierarchical:
+            # TODO(看科学空间，并记录笔记在onenote)
+            alpha = 0.4 if self.hierarchical is True else self.hierarchical
+            embeddings = self.embeddings - alpha * self.embeddings[:1]
+            embeddings = embeddings / (1 - alpha)
+            embeddings_x = K.gather(embeddings, position_ids // self.input_dim)
+            embeddings_y = K.gather(embeddings, position_ids % self.input_dim)
+            embeddings = alpha * embeddings_x + (1 - alpha) * embeddings_y
+        else:
+            if self.custom_position_ids:
+                embeddings = K.gather(self.embeddings, position_ids)
+            else:
+                embeddings = self.embeddings[None, :seq_len]
+
+        if self.merge_mode == 'add':
+            return inputs + embeddings
+        elif self.merge_mode == 'mul':
+            return inputs * (embeddings + 1.0)
+        elif self.merge_mode == 'zero':
+            return embeddings
+        else:
+            if not self.custom_position_ids:
+                embeddings = K.tile(embeddings, [batch_size, 1, 1])
+            return K.concatenate([inputs, embeddings])
+
+    def compute_output_shape(self, input_shape):
+        if self.custom_position_ids:
+            input_shape = input_shape[0]
+
+        if self.merge_mode in ['add', 'mul', 'zero']:
+            return input_shape[:2] + (self.output_dim,)
+        else:
+            return input_shape[:2] + (input_shape[2] + self.output_dim,)
+
+    def get_config(self):
+        config = {
+            'input_dim': self.input_dim,
+            'output_dim': self.output_dim,
+            'merge_mode': self.merge_mode,
+            'hierarchical': self.hierarchical,
+            'embeddings_initializer':
+                initializers.serialize(self.embeddings_initializer),
+            'custom_position_ids': self.custom_position_ids,
+        }
+        base_config = super(PositionEmbedding, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
 
 class FeedForward(Layer):
