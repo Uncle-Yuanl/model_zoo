@@ -6,7 +6,7 @@ import tensorflow.keras.backend as K
 
 from tensorflow.python.util import nest, tf_inspect
 from tensorflow.python.eager import tape
-from tensorflow.python.ops.custom_gradient import graph_mode_decorator
+# from tensorflow.python.ops.custom_gradient import graph_mode_decorator
 
 
 # 是否使用重计算
@@ -17,11 +17,35 @@ def align(tensor, axes, ndim=None):
     """重新对齐tensor（批量版expand_dims）感觉更像是transpose
     axes: 原来的第i维对齐新tensor的第axes[i]维；
     ndim: 新tensor的维度
+
+    Example:
+
+    >>> tensor = tf.constant(np.arange(12).reshape(3,4), dtype=tf.float32)
+    >>> print(tensor)
+    tf.Tensor(
+    [[ 0.  1.  2.  3.]
+     [ 4.  5.  6.  7.]
+     [ 8.  9. 10. 11.]], shape=(3, 4), dtype=float32)
+
+    >>> same_dim = align(tensor, [0, -1], 2)
+    >>> print(same_dim)
+    tf.Tensor(
+    [[ 0.  1.  2.  3.]
+     [ 4.  5.  6.  7.]
+     [ 8.  9. 10. 11.]], shape=(3, 4), dtype=float32)
+
+    >>> more_dim = align(tensor, [0, -1], 3)
+    >>> print(more_dim)
+    tf.Tensor(
+    [[[ 0.  1.  2.  3.]]
+    <BLANKLINE>
+     [[ 4.  5.  6.  7.]]
+    <BLANKLINE>
+     [[ 8.  9. 10. 11.]]], shape=(3, 1, 4), dtype=float32)
     """
     assert len(axes) == K.ndim(tensor)
     indices = [None] * (ndim or max(axes))
     for i in axes:
-        # TODO(1、slice看笔记再确认，并且参考tf将examples写进注释)
         indices[i] = slice(None)
     return tensor[indices]
 
@@ -152,4 +176,8 @@ def set_infinity(value):
 K.infinity = infinity
 K.set_infinity = set_infinity
 sys.modules['tensorflow.keras.backend'] = K
+
+if __name__ == '__main__':
+    import doctest
+    doctest.testmod()
 
