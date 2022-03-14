@@ -80,9 +80,8 @@ class Transformer(object):
         -----------
         attention_caches: dict
             为Attention的k, v的缓存序列字段，{Attention层名: [k缓存, v缓存]}
-        layer_norm_*: ??
+        layer_norm_*:
             实现Conditional Layer Normalization时使用，用来实现"固定长度向量"为条件的条件Bert
-            啥呀？？？？
         """
         if self.built:
             return None
@@ -396,13 +395,13 @@ class BERT(Transformer):
     """
     def __init__(
         self,
-        max_position,  # 最大序列长度
+        max_position,  # 预训练的最大序列长度，实际长度依赖sequence_length
         segment_vocab_size=2,  # segment总数目  ？？？？
         with_pool=False,  # 是否包含Pool部分
         with_nsp=False,  # 是否包含NSP部分
         with_mlm=False,  # 是否包含MLM部分
         hierarchical_position=False,  # 是否层次分解位置编码，用于超长文本
-        custom_position_ids=None,  # 自行传入位置id  ## TODO(绝对相对？？)
+        custom_position_ids=None,  # 自行传入位置id
         shared_segment_embeddings=False,  # 若True，segment和token公用embedding
         **kwargs
     ):
@@ -424,7 +423,6 @@ class BERT(Transformer):
         同时允许自行传入位置ids，以实现一些特殊需求
         """
         # 没有传入input关键字参数，更新字典后，直接返回实例
-        # TODO(父类属性，为啥不用max_position？？)
         x_in = self.apply(
             layer=Input, shape=(self.sequence_length, ), name='Input-Token'
         )
@@ -461,7 +459,7 @@ class BERT(Transformer):
             p = None
         # call函数中使用，build函数才会设计到
         # layer_norm_cond[输入，units，activation]
-        # TODO(验证这里是将train中的参数传给inference吗？？)
+        # 将condition（Embedding实例）传入
         z = self.layer_norm_conds[0]
 
         x = self.apply(
@@ -496,7 +494,6 @@ class BERT(Transformer):
 
         x = self.apply(
             inputs=self.simplify([x, p]),
-            # TODO(看)
             layer=PositionEmbedding,
             input_dim=self.max_position,
             output_dim=self.embedding_size,
@@ -509,7 +506,7 @@ class BERT(Transformer):
 
         x = self.apply(
             inputs=self.simplify([x, z]),
-            # TODO(Q: z是啥，训练过程保存的参数均值、方差吗？？)
+            # z是条件，examples中是情感嵌入
             layer=LayerNormalization,
             conditional=(z is not None),
             hidden_units=self.layer_norm_conds[1],
@@ -655,12 +652,14 @@ class BERT(Transformer):
         outputs.append(x)
 
         if self.with_mlm:
-            # Masked Language Model部分
+            # Masked Language Model部分，预测的是token
             x = outputs[0]
             x = self.apply(
                 inputs=x,
                 layer=Dense,
-                # TODO(why embedding_size？？)
+                # Q：why embedding_size？？
+                # A：http://www.sniper97.cn/index.php/note/deep-learning/note-deep-learning/3810/
+                # A：https://kexue.fm/archives/8747
                 units=self.embedding_size,
                 activation=self.hidden_act,
                 kernel_initializer=self.initializer,
@@ -675,14 +674,14 @@ class BERT(Transformer):
                 hidden_initializer=self.initializer,
                 name='MLM-Norm'
             )
-            # TODO(why Embedding？？)
+            # 输入：token -Embedding-> vector
+            # 输出：token -Embedding-> prediction
             x = self.apply(
                 inputs=x,
                 layer=Embedding,
-                arguments={'mode': 'dense'},
-                name='Embedding-Token'
+                arguments={'mode': 'dense'},  # transpose操作
+                name='Embedding-Token'  # 这个名字在self.set_inputs已经添加过了，直接调用
             )
-            # TODO(这这一步使用仿射变换为啥？？)
             x = self.apply(inputs=x, layer=ScaleOffset, name='MLM-Bias')
             mlm_activation = 'softmax' if self.with_mlm is True else self.with_mlm
             x = self.apply(
