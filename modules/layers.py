@@ -30,6 +30,44 @@ class Layer(tf.keras.layers.Layer):
         self.supports_masking = True  # 本项目的自定义层均可mask
 
 
+class Embedding(tf.keras.layers.Embedding):
+    """拓展Embedding层
+    """
+    def compute_mask(self, inputs, mask=None):
+        """为了适配T5，保证第一个token不被mask
+        """
+        if K.ndim(inputs) == 2:
+            super(Embedding, self).compute_mask(inputs, mask)
+            if mask is not None:
+                # 都是1
+                mask1 = K.ones_like(mask[:, :1], dtype='bool')
+                mask2 = mask[:, 1:]
+                return K.concatenate([mask1, mask2], 1)
+        else:
+            return mask
+
+    def call(self, inputs, mode='embedding'):
+        """新增mode参数，可以为embedding或者dense
+        embedding：普通Embedding层；dense：无bias的dense层
+        """
+        if mode == 'embedding':
+            return super(Embedding, self).call(inputs)
+        else:
+            # 父类build函数中add_weight
+            kernel = K.transpose(self.embeddings)
+            return K.dot(inputs, kernel)
+
+    def compute_output_shape(self, input_shape):
+        """关于判据，本来是通过缓存call时的mode参数来判断的，但是后来发现
+        Keras在使用compute_output_shape的时候不一定配套调用了call函数，
+        所以缓存的mode可能是不准的，因此只能出此下策。
+        """
+        if len(input_shape) == 2:
+            return super(Embedding, self).compute_output_shape(input_shape)
+        else:
+            return input_shape[:2] + (K.int_shape(self.embeddings)[0], )
+
+
 class ScaleOffset(Layer):
     """简单的仿射变换层（最后一维乘上gamma向量并加上beta向量）
     说明：1、具体操作为最后一维乘上gamma向量，并加上beta向量；
@@ -38,9 +76,9 @@ class ScaleOffset(Layer):
             用于通过外部条件控制beta和gamma。
 
     使用：1、https://github.com/bojone/bert4keras/blob/master/examples/task_conditional_language_model.py
-         2、conditional is not None --> inputs = [inputs, cond]在call函数中与inputs维度对齐
-         3、cond也就是build函数的输入之一，在apply_embedding函数中调用
-         4、cond的设置比较宽松，主要是相应的Embedding层的设置，作为additional_input_layer
+         2、conditional(cond is not None) is not False --> inputs = [inputs, cond]在call函数中与inputs维度对齐
+         3、cond也就是build函数的输入之一，是Embedding子类，在apply_embedding函数中调用
+         4、cond_in的设置比较宽松，作为additional_input_layer，主要是相应的conds(Embedding层)的设置
     """
     def __init__(
         self,
