@@ -30,13 +30,17 @@ class Layer(tf.keras.layers.Layer):
         self.supports_masking = True  # 本项目的自定义层均可mask
 
 
-# TODO(这样condition)
 class ScaleOffset(Layer):
     """简单的仿射变换层（最后一维乘上gamma向量并加上beta向量）
     说明：1、具体操作为最后一维乘上gamma向量，并加上beta向量；
          2、如果直接指定scale和offset，那么直接常数缩放和平移；
          3、hidden_*系列参数仅为有条件输入时（conditional=True）使用，
             用于通过外部条件控制beta和gamma。
+
+    使用：1、https://github.com/bojone/bert4keras/blob/master/examples/task_conditional_language_model.py
+         2、conditional is not None --> inputs = [inputs, cond]在call函数中与inputs维度对齐
+         3、cond也就是build函数的输入之一，在apply_embedding函数中调用
+         4、cond的设置比较宽松，主要是相应的Embedding层的设置，作为additional_input_layer
     """
     def __init__(
         self,
@@ -60,12 +64,12 @@ class ScaleOffset(Layer):
     def build(self, input_shape):
         super(ScaleOffset, self).build(input_shape)
 
-        # TODO(为什么有conditional的区别)
+        # Q：为什么有conditional的区别
+        # A：仿射变换的gamma、beta都是根据conds计算
         if self.conditional:
             input_shape = input_shape[0]
 
         if self.offset is True:
-            # TODO(1、keras.layers.Layer的类方法)
             self.beta = self.add_weight(
                 name='beta', shape=input_shape[-1], initializer='zeros'
             )
@@ -108,7 +112,6 @@ class ScaleOffset(Layer):
     @recompute_grad
     def call(self, inputs):
         if self.conditional:
-            # TODO(conds到底是什么？？同CLN)
             inputs, conds = inputs
             if self.hidden_units is not None:
                 conds = self.hidden_dense(conds)
@@ -296,7 +299,6 @@ class MultiHeadAttention(Layer):
         if a_bias:
             a_bias = inputs[n]
             n += 1
-        # TODO(学习position bias，包括绝对与相对)
         if p_bias == 'rotary':
             # 公式链接：https://spaces.ac.cn/archives/8265
             # inputs[n]是Sinusoidal位置编码，θi=10000^(−2i/d)
@@ -371,7 +373,7 @@ class MultiHeadAttention(Layer):
         return dict(list(config.items()) + list(base_config.items()))
 
 
-# TODO(为什么会继承ScaleOffset？？也就是看call函数最后的super)
+# TODO(看上去即使有conds，只要没有scale和offset就跟普通LN一样啊？)
 class LayerNormalization(ScaleOffset):
     """(cnditional) Layer Normalization
     """
@@ -508,7 +510,7 @@ class PositionEmbedding(Layer):
 class FeedForward(Layer):
     """FeedForward层
     如果activation不是一个list，那么它就是两个Dense层叠加；否则第一个Dense层将会被替换成门控线性单元（Gated Linear Unit）
-    TODO(论文：https://arxiv.org/abs/2002.05202)
+    论文：https://arxiv.org/abs/2002.05202
     """
     def __init__(
         self,
@@ -547,9 +549,10 @@ class FeedForward(Layer):
 
     @recompute_grad
     def call(self, inputs):
+        # 第一个的激活函数不限制，但论文里面relu、gelu(Gaussian Error Linear Units)、Swish都可
         x = self.i0_dense(inputs)
+        # 根据activations的数量自定义层数了
         for i in range(1, len(self.activation)):
-            # TODO(这里看下论文)
             x = x * getattr(self, 'i%s_dense' % i)(inputs)
         x = self.o_dense(x)
         return x
