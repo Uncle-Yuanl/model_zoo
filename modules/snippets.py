@@ -12,6 +12,13 @@ is_py2 = six.PY2
 if not is_py2:
     basestring = str
 
+
+def is_string(s):
+    """判断是否为字符串
+    """
+    return isinstance(s, basestring)
+
+
 def orthogonally_resize(a, new_shape, window=2):
     """简单的正交化缩放矩阵
 
