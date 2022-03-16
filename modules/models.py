@@ -171,12 +171,11 @@ class Transformer(object):
                     inputs = inputs[:1] + [k, v] + inputs[3:]
                 if self.residual_attention_scores:
                     # 如何使用残差Attention矩阵，则给每个Attention矩阵加上前上一层的Attention
-                    # TODO(矩阵，这对应RealFormer设计（https://arxiv.org/abs/2012.11747）。)
+                    # RealFormer设计：https://arxiv.org/abs/2012.11747
                     # 目前该实现还相对粗糙，可能欠缺通用性。
                     if self.attention_scores is not None:
-                        # 看一下arguments在call函数中是怎么起作用的？？？？
                         if arguments.get('a_bias'):
-                            # 所以这个inputs[3]是什么，看下jupyter的笔记
+                            # inputs[3]是a_bias，直接将前一层的attention_scores加在bias上
                             a_bias = Add(name=name + '-Attention-Bias')(inputs[3], self.attention_scores)
                             inputs = inputs[:3] + [a_bias] + inputs[3:]
                         else:
@@ -390,6 +389,61 @@ class Transformer(object):
                 saver.save(sess, filename)
 
 
+class LM_Mask:
+    """定义下三角Attention Mask（语言模型用）
+    """
+    def compute_attention_bias(self, inputs=None):
+        """通过idxs序列的比较来得到对应的mask
+        """
+        # TODO(父类是object，哪来的attention_bias和apply)
+        if self.attention_bias is None:
+
+            def lm_mask(s):
+                seq_len = K.shape(s)[1]
+                idxs = K.arange(0, seq_len)
+                # 下三角   (1, seq_len)     (seq_len, 1)
+                mask = idxs[None, :] <= idxs[:, None]
+                mask = K.cast(mask, K.floatx())
+                #          (1, 1, seq_len, seq_len)
+                # 差别是0也会给上符号
+                # 结果：上三角为无穷小数，softmax起效
+                return -(1 - mask[None, None]) * K.infinity()
+
+            self.attention_bias = self.apply(
+                inputs=self.inputs[0],
+                layer=Lambda,
+                function=lm_mask,
+                name='Attention-LM-Mask'
+            )
+        return self.attention_bias
+
+
+class UniLM_Mask:
+    """定义UniLM的Attention Mask（Seq2Seq模型用）
+    其中source和target的分区，由segment_ids来表示。
+    TODO(UniLM: https://arxiv.org/abs/1905.03197)
+    """
+    def compute_attention_bias(self, inputs=None):
+        if self.attention_bias is None:
+
+            def unilm_mask(s):
+                # 在句子维度上累加？？
+                idxs = K.cumsum(s, axis=1)
+                mask = idxs[:, None, :] <= idxs[:, :, None]
+                mask = K.cast(mask, K.floatx())
+                return -(1 - mask[:, None]) * K.infinity()
+
+            self.attention_bias = self.apply(
+                # TODO(差别)
+                inputs=self.inputs[1],
+                layer=Lambda,
+                function=unilm_mask,
+                name='Attention-UniLM-Mask'
+            )
+
+        return self.attention_bias
+
+
 class BERT(Transformer):
     """构建BERT模型
     """
@@ -547,7 +601,7 @@ class BERT(Transformer):
         # Self Attention
         xi, x, arguments = x, [x, x, x], {'a_bias': None}
         if attention_mask is not None:
-            # TODO(mask == bias ？？)
+            # attention_mask = self.compute_attention_bias(index) = self.attention_bias
             arguments['a_bias'] = True
             x.append(attention_mask)
 
@@ -789,28 +843,89 @@ class BERT(Transformer):
         return mapping
 
 
+def extend_with_language_model(BaseModel):
+    """添加下三角Attention Mask（语言模型用）
+    """
+    class LanguageModel(LM_Mask, BaseModel):
+        """带下三角Attention Mask的派生模型
+        """
+        def __init__(self, *args, **kwargs):
+            super(LanguageModel, self).__init__(*args, **kwargs)
+            self.with_mlm = self.with_mlm or True
+
+    return LanguageModel
 
 
+def extend_with_unified_language_model(BaseModel):
+    """添加UniLM的Attention Mask（seq2seq模型用）
+    """
+    class UnifiedLanguageModel(UniLM_Mask, BaseModel):
+        """带UniLM的Attention Mask的派生模型
+        """
+        def __init__(self, *args, **kwargs):
+            super(UnifiedLanguageModel, self).__init__(*args, **kwargs)
+            self.with_mlm = self.with_mlm or True
+
+    return UnifiedLanguageModel
 
 
+def build_transformer_model(
+        config_path=None,
+        checkpoint_path=None,
+        model='bert',
+        application='encoder',
+        return_keras_model=True,
+        **kwargs
+):
+    """根据配置文件构造模型，可选加载checkpoint权重
+    """
+    configs = {}
+    if config_path is not None:
+        configs.update(json.load(open(config_path)))
+    configs.update(kwargs)
+    # 一些bert原始config.json的命名区别
+    if 'max_position' not in configs:
+        configs['max_position'] = configs.get('max_position_embeddings', 512)
+    if 'drop_rate' not in configs:
+        configs['dropout_rate'] = configs.get('hidden_dropout_prob')
+    if 'attention_dropout_rate' not in configs:
+        configs['attention_dropout_rate'] = configs.get(
+            'attention_probs_dropout_prob'
+        )
+    if 'segment_vocab_size' not in configs:
+        configs['segment_vocab_size'] = configs.get('type_vocab_size', 2)
 
+    models = {
+        'bert': BERT,
+    }
 
+    if is_string(model):
+        model = model.lower()
+        MODEL = models[model]
+        if model.endswith('t5.1.1'):
+            configs['version'] = model
+    else:
+        MODEL = model
 
+    application = application.lower()
+    if application in ['lm', 'unilm'] and model in ['electra', 't5']:
+        raise ValueError(
+            '"%s" model can not be used as "%s" application.\n' %
+            (model, application)
+        )
 
+    if application == 'lm':
+        MODEL = extend_with_language_model(MODEL)
+    elif application == 'unilm':
+        MODEL = extend_with_unified_language_model(MODEL)
 
+    transformer = MODEL(**configs)
+    transformer.build(**configs)
 
+    if checkpoint_path is not None:
+        transformer.load_weights_from_checkpoint(checkpoint_path)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    if return_keras_model:
+        return transformer.model
+    else:
+        return transformer
