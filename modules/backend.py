@@ -13,6 +13,33 @@ from tensorflow.python.eager import tape
 do_recompute = strtobool(os.environ.get('RECOMPUTE', '0'))
 
 
+# 知乎：https://zhuanlan.zhihu.com/p/349492378
+# 论文：https://arxiv.53yu.com/pdf/1606.08415.pdf
+def gelu_erf(x):
+    """根据erf直接计算gelu
+    """
+    # np的精度更高，默认64位，tf默认32位
+    return 0.5 * x * (1.0 + tf.math.erf(x / np.sqrt(2.0)))
+
+
+def gelu_tanh(x):
+    cdf = 0.5 * (
+        1 + K.tanh(np.sqrt(2 / np.pi) * (x + 0.044715 * K.pow(x,3)))
+    )
+    return x * cdf
+
+
+def set_gelu(version):
+    """设置gelu版本
+    """
+    version = version.lower()
+    assert version in ['erf', 'tanh'], 'gelu version must in erf or tanh'
+    if version == 'erf':
+        tf.keras.utils.get_custom_objects()['gelu'] = gelu_erf
+    elif version == 'tanh':
+        tf.keras.utils.get_custom_objects()['gelu'] = gelu_tanh
+
+
 def align(tensor, axes, ndim=None):
     """重新对齐tensor（批量版expand_dims）感觉更像是transpose
     axes: 原来的第i维对齐新tensor的第axes[i]维；
@@ -176,6 +203,13 @@ def set_infinity(value):
 K.infinity = infinity
 K.set_infinity = set_infinity
 sys.modules['tensorflow.keras.backend'] = K
+
+custom_objects = {
+    'gelu_erf': gelu_erf,
+    'gelu_tanh': gelu_tanh,
+    'gelu': gelu_erf,
+}
+tf.keras.utils.get_custom_objects().update(custom_objects)
 
 if __name__ == '__main__':
     import doctest
