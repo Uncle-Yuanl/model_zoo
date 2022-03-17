@@ -102,7 +102,7 @@ class Transformer(object):
         self.model = Model(self.inputs, self.outputs, name=self.name)
         self.built = True
 
-    def call(self, *inputs):
+    def call(self, inputs):
         """定义模型执行流程
 
         这种方法将层与结构解耦，方便子类配置
@@ -684,26 +684,26 @@ class BERT(Transformer):
                 function=lambda x: x[:, 0],
                 name='Pooler'
             )
-        pool_activation = 'tanh' if self.with_pool is True else self.with_pool
-        x = self.apply(
-            inputs=x,
-            layer=Dense,
-            uints=self.hidden_size,
-            activation=pool_activation,
-            kernel_initializer=self.initializer,
-            name='Pooler-Dense'
-        )
-        if self.with_nsp:
-            # Next Sentence Prediction部分
+            pool_activation = 'tanh' if self.with_pool is True else self.with_pool
             x = self.apply(
                 inputs=x,
                 layer=Dense,
-                units=2,
-                activation='softmax',
+                units=self.hidden_size,
+                activation=pool_activation,
                 kernel_initializer=self.initializer,
-                name='NSP-Proba'
+                name='Pooler-Dense'
             )
-        outputs.append(x)
+            if self.with_nsp:
+                # Next Sentence Prediction部分
+                x = self.apply(
+                    inputs=x,
+                    layer=Dense,
+                    units=2,
+                    activation='softmax',
+                    kernel_initializer=self.initializer,
+                    name='NSP-Proba'
+                )
+            outputs.append(x)
 
         if self.with_mlm:
             # Masked Language Model部分，预测的是token

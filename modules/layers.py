@@ -458,7 +458,7 @@ class LayerNormalization(ScaleOffset):
 class PositionEmbedding(Layer):
     """定义可训练的位置Embedding
     """
-    def __int__(
+    def __init__(
         self,
         input_dim,  # 预训练时的最大长度，bert=512
         output_dim,
@@ -489,7 +489,7 @@ class PositionEmbedding(Layer):
         """
         if self.custom_position_ids:
             inputs, position_ids = inputs
-            if 'int' not in K.type(position_ids):
+            if 'int' not in K.dtype(position_ids):
                 position_ids = K.cast(position_ids, 'int32')
         else:
             input_shape = K.shape(inputs)
@@ -570,7 +570,7 @@ class FeedForward(Layer):
     def build(self, input_shape):
         super(FeedForward, self).build(input_shape)
         output_dim = input_shape[-1]
-        for i, activation in self.activation:
+        for i, activation in enumerate(self.activation):
             i_dense = Dense(
                 units=self.units,
                 activation=activation,
