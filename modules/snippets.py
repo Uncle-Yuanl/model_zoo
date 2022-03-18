@@ -19,6 +19,41 @@ def is_string(s):
     return isinstance(s, basestring)
 
 
+def lowercase_and_normalize(text):
+    """转小写并进行简单的标准化
+    """
+    text = text.lower()
+    text = unicodedata.normalize('NFD', text)
+    # Mn: Mark, Nonspacing
+    text = ''.join([ch for ch in text if unicodedata.category(ch) != 'Mn'])
+    return text
+
+
+def truncate_sequences(maxlen, indices, *sequences):
+    """截断总长度至不超过maxlen
+    循环地pop掉除了_token_end的最后一个元素
+
+    parameters:
+    indices: int
+        pop的索引，一般为-1，如果加上了_token_end（如'[SEP]'）则为-2
+    """
+    # tuple -> list
+    sequences = [s for s in sequences if s]
+    if not isinstance(indices, (list, tuple)):
+        indices = [indices] * len(sequences)
+
+    while True:
+        lengths = [len(s) for s in sequences]
+        if sum(lengths) > maxlen:
+            i = np.argmax(lengths)
+            sequences[i].pop(indices[i])
+        else:
+            return sequences
+
+
+
+
+# TODO(复习)
 def orthogonally_resize(a, new_shape, window=2):
     """简单的正交化缩放矩阵
 
