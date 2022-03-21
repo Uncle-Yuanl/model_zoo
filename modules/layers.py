@@ -608,6 +608,162 @@ class FeedForward(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
+class ConditionalRandomField(Layer):
+    """
+    """
+    def __init__(self, lr_multiplier=1, **kwargs):
+        super(ConditionalRandomField, self).__init__(**kwargs)
+        self.lr_multiplier = lr_multiplier  # 当前层学习率的放大倍数
+
+    @integerize_shape
+    def build(self, input_shape):
+        """
+        """
+        super(ConditionalRandomField, self).build(input_shape)
+        output_dim = input_shape[-1]
+        self._trans = self.add_weight(
+            name='trans',
+            shape=(output_dim, output_dim),
+            initializer='glorot_uniform'
+        )
+        # 因为设置学习率是通过weight * lamb来实现的，所以weight的初始化要变为weight / lamb。
+        # TODO(搞清为什么初始化要除)
+        if self.lr_multiplier != 1:
+            K.set_value(self._trans, K.eval(self._trans) / self.lr_multiplier)
+
+    @property
+    def trans(self):
+        if self.lr_multiplier != 1:
+            return self._trans * self.lr_multiplier
+        else:
+            return self._trans
+
+    def compute_mask(self, inputs, mask=None):
+        return None
+
+    def call(self, inputs, mask=None):
+        # TODO(call函数调用，以及mask传参，如果是None，那padding部分呢)
+        return sequence_masking(inputs, mask, '-inf', 1)
+
+    def target_score(self, y_true, y_pred):
+        # TODO(为啥一半用pred的，trans_score又完全用true的呢？)
+        point_score = tf.einsum('bni,bni->b', y_true, y_pred)
+        trans_score = tf.einsum(
+            # y_都是三维数据，虽然[]只有两个，就是默认前两个，也就是在时间步上的切片
+            # 1、bni,ij->bnj ==》 每一行保留的是该行元素转移到其他元素的概率
+            # 2、bnj,bnj->b  ==》 元素对应相乘累加，因为是[:, 1:]，所以是转移到该标签的概率
+            'bni,ij,bnj->b', y_true[:, :-1], self._trans, y_true[:, 1:]
+        )  # 标签转移得分
+        return point_score + trans_score
+
+    def log_norm_step(self, inputs, states):
+        """递归计算归一化因子，将tf_scan用递归实现，递归用K.rnn实现
+        要点：1、递归计算；2、用logsumexp避免溢出。
+
+        parameters:
+        -----------
+        inputs: tensor
+            没有归一化的得分，encoder输出[..., 1:]，提供point_scores，注意是每个时间步
+        states: tensor
+            初始状态，即hidden_state，随时间步更新。也就是encoder输出的第一个，提供trans的索引
+        """
+        inputs, mask = inputs[:, :-1], inputs[:, -1:]  # inputs size = (batch_size, output_dim)
+        states = K.expand_dims(states, 2)     # (batch_size, output_dim, 1)
+        trans = K.expand_dims(self.trans, 0)  # (1, output_dim, output_dim)
+        # 共有三维，所以axis=1就是纵向，第0个元素即0->0 + 1->0 + ...
+        outputs = tf.reduce_logsumexp(states + trans, axis=1)  # (batch_size, output_dim)
+        # TODO(api学习：K.rnn的输入是不是已经取了每个时间步，即维度-1)
+        outputs = outputs + inputs
+        # TODO(states[:, :, 0]乘这个的目的是什么)
+        outputs = outputs * mask + (1 - mask) * states[:, :, 0]
+        return outputs, [outputs]
+
+    def dense_loss(self, y_true, y_pred):
+        """y_true需要是one_hot形式
+        """
+        # 导出mask并转换数据类型
+        # TODO(看y_true的padding部分，为什么这里是-1e6)
+        mask = K.all(K.greater(y_true, -1e6), axis=2, keepdims=True)
+        mask = K.cast(mask, K.floatx())
+        # 计算目标分数
+        y_true, y_pred = y_true * mask, y_pred * mask
+        target_score = self.target_score(y_true, y_pred)
+        # 递归计算log z
+        # TODO([]的意义，注意参看cnn时间步数据的选取)
+        init_states = y_pred[:, 0]
+        y_pred = K.concatenate([y_pred, mask], axis=2)
+        # 排除了初始时间步
+        input_length = K.int_shape(y_pred[:, 1:])[1]
+        log_norm, _, _ = K.rnn(
+            step_function=self.log_norm_step,
+            inputs=y_pred,
+            init_states=init_states,
+            input_length=input_length
+        )  # 最后一步的log z
+        log_norm = tf.reduce_logsumexp(log_norm, axis=1)  # 转为标量
+        # 计算损失 -log p
+        return log_norm - target_score
+
+    def sparse_loss(self, y_true, y_pred):
+        """y_true是整数型式，非one-hot，那么维度自然就少最后一个
+        """
+        # 重新明确shape和dtype，不是在这里就转了
+        y_true = K.reshape(y_true, K.shape(y_pred)[:-1])
+        y_true = K.case(y_true, 'int32')  # K.one_hot api需要的是整数tensor
+
+        y_true = K.one_hot(y_true, K.shape(self.trans)[0])
+        return self.dense_loss(y_true, y_pred)
+
+    def dense_accuracy(self, y_true, y_pred):
+        """训练过程中显示逐帧准确率的函数，排除了mask的影响
+        此处y_true需要是one hot形式
+        """
+        y_true = K.argmax(y_true, axis=2)
+        return self.sparse_accuracy(y_true, y_pred)
+
+    def sparse_accuracy(self, y_true, y_pred):
+        """训练过程中显示逐帧准确率的函数，排除了mask的影响
+        此处y_true需要是整数形式（非one hot）
+        """
+        # 导出mask并转换数据类型
+        mask = K.all(K.greater(y_pred, -1e6), axis=2)
+        mask = K.cast(mask, K.floatx())
+        # 重新明确y_true的shape和dtype
+        y_true = K.reshape(y_true, K.shape(y_pred)[:-1])
+        y_true = K.cast(y_true, 'int32')
+        # 逐标签取最大来粗略评测训练效果
+        y_pred = K.cast(K.argmax(y_pred, axis=2), 'int32')
+        isequal = K.cast(K.equal(y_true, y_pred), K.floatx())
+        return K.sum(isequal * mask) / K.sum(mask)
+
+    def get_config(self):
+        config = {
+            'lr_multiplier': self.lr_multiplier,
+        }
+        base_config = super(ConditionalRandomField, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        
 
 
 custom_objects = {
