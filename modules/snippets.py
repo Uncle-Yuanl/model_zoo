@@ -51,8 +51,6 @@ def truncate_sequences(maxlen, indices, *sequences):
             return sequences
 
 
-
-
 # TODO(复习)
 def orthogonally_resize(a, new_shape, window=2):
     """简单的正交化缩放矩阵
@@ -86,6 +84,46 @@ def orthogonally_resize(a, new_shape, window=2):
     # 与原范数相等
     return a / np.linalg.norm(a) * a_norm
 
+
+class ViterbiDecoder:
+    """Viterbi解码算法基类
+    """
+    def __init__(self, trans, starts=None, ends=None):
+        self.trans = trans
+        self.num_labels = len(trans)
+        self.non_starts = []
+        self.non_ends = []
+        if starts is not None:
+            for i in range(self.num_labels):
+                if i not in starts:
+                    self.non_starts.append(i)
+        if ends is not None:
+            for i in range(self.num_labels):
+                if i not in ends:
+                    self.non_ends.append(i)
+
+    def decode(self, nodes):
+        """nodes.shape=[seq_len, num_labels]
+        """
+        # 预处理，主要是[CLS], [SEP]固定为0
+        nodes[0, self.non_starts] -= np.inf
+        nodes[0, self.non_ends] -= np.inf
+
+        # 动态规划
+        labels = np.arange(self.num_labels).reshape((1, -1))
+        scores = nodes[0].reshape((-1, 1))
+        path = labels
+        for l in range(1, len(nodes)):
+            M = scores + self.trans + nodes[l].reshape((1, -1))
+            idxs = M.argmax(axis=0)
+            scores = M.max(axis=0).reshape((-1, 1))
+            # 注意path[:, idx]这种切片方式，按照idxs取0维上最后一个元素
+            # [[0,0,0], [4,5,6]][:, [1,0,2]] -> [[0,0,0], [5,4,6]]
+            # [[0,0,0], [4,5,6]][:, [1,0,0]] -> [[0,0,0], [5,4,4]]
+            path = np.concatenate([path[:, idxs], labels], axis=0)
+
+        # 最优路径
+        return path[:, scores[:, 0].argmax()]
 
 
 if __name__ == '__main__':
