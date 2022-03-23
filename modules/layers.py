@@ -609,7 +609,8 @@ class FeedForward(Layer):
 
 
 class ConditionalRandomField(Layer):
-    """
+    """纯Keras实现CRF层
+    CRF层本质上是一个带训练参数的loss计算层。
     """
     def __init__(self, lr_multiplier=1, **kwargs):
         super(ConditionalRandomField, self).__init__(**kwargs)
@@ -617,8 +618,6 @@ class ConditionalRandomField(Layer):
 
     @integerize_shape
     def build(self, input_shape):
-        """
-        """
         super(ConditionalRandomField, self).build(input_shape)
         output_dim = input_shape[-1]
         self._trans = self.add_weight(
@@ -626,8 +625,10 @@ class ConditionalRandomField(Layer):
             shape=(output_dim, output_dim),
             initializer='glorot_uniform'
         )
+        # https://spaces.ac.cn/archives/6418
         # 因为设置学习率是通过weight * lamb来实现的，所以weight的初始化要变为weight / lamb。
-        # TODO(搞清为什么初始化要除)
+        # 初始化的值用来求偏导数的，见下面的target_score是用的self.trans，也就是正常的参数
+        # 前向计算时用正常的参数算出loss: L(λφ)，求导数时用缩小的: ∂L(λφ)/∂φ
         if self.lr_multiplier != 1:
             K.set_value(self._trans, K.eval(self._trans) / self.lr_multiplier)
 
@@ -642,7 +643,8 @@ class ConditionalRandomField(Layer):
         return None
 
     def call(self, inputs, mask=None):
-        # TODO(call函数调用，以及mask传参，如果是None，那padding部分呢)
+        # 也可以把下面的rnn计算过程放在call函数里面，最后loss就简单地相减就OK
+        # padding在dense_loss开始就通过y_true提取出来了
         return sequence_masking(inputs, mask, '-inf', 1)
 
     def target_score(self, y_true, y_pred):
@@ -652,7 +654,7 @@ class ConditionalRandomField(Layer):
             # y_都是三维数据，虽然[]只有两个，就是默认前两个，也就是在时间步上的切片
             # 1、bni,ij->bnj ==》 每一行保留的是该行元素转移到其他元素的概率
             # 2、bnj,bnj->b  ==》 元素对应相乘累加，因为是[:, 1:]，所以是转移到该标签的概率
-            'bni,ij,bnj->b', y_true[:, :-1], self._trans, y_true[:, 1:]
+            'bni,ij,bnj->b', y_true[:, :-1], self.trans, y_true[:, 1:]
         )  # 标签转移得分
         return point_score + trans_score
 
@@ -672,7 +674,8 @@ class ConditionalRandomField(Layer):
         trans = K.expand_dims(self.trans, 0)  # (1, output_dim, output_dim)
         # 共有三维，所以axis=1就是纵向，第0个元素即0->0 + 1->0 + ...
         outputs = tf.reduce_logsumexp(states + trans, axis=1)  # (batch_size, output_dim)
-        # TODO(api学习：K.rnn的输入是不是已经取了每个时间步，即维度-1)
+        # 源码中for i in time_steps
+        # https://github.com/tensorflow/tensorflow/blob/v2.0.0/tensorflow/python/keras/backend.py#L3821-L4181
         outputs = outputs + inputs
         # TODO(states[:, :, 0]乘这个的目的是什么)
         outputs = outputs * mask + (1 - mask) * states[:, :, 0]
@@ -689,8 +692,8 @@ class ConditionalRandomField(Layer):
         y_true, y_pred = y_true * mask, y_pred * mask
         target_score = self.target_score(y_true, y_pred)
         # 递归计算log z
-        # TODO([]的意义，注意参看cnn时间步数据的选取)
-        init_states = y_pred[:, 0]
+        # api要求：in a nested shape
+        init_states = [y_pred[:, 0]]
         y_pred = K.concatenate([y_pred, mask], axis=2)
         # 排除了初始时间步
         input_length = K.int_shape(y_pred[:, 1:])[1]
@@ -709,7 +712,7 @@ class ConditionalRandomField(Layer):
         """
         # 重新明确shape和dtype，不是在这里就转了
         y_true = K.reshape(y_true, K.shape(y_pred)[:-1])
-        y_true = K.case(y_true, 'int32')  # K.one_hot api需要的是整数tensor
+        y_true = K.cast(y_true, 'int32')  # K.one_hot api需要的是整数tensor
 
         y_true = K.one_hot(y_true, K.shape(self.trans)[0])
         return self.dense_loss(y_true, y_pred)
@@ -744,30 +747,15 @@ class ConditionalRandomField(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        
-
-
 custom_objects = {
+    'Embedding': Embedding,
+    'ScaleOffset': ScaleOffset,
     'Concatenate1D': Concatenate1D,
+    'MultiHeadAttention': MultiHeadAttention,
+    'LayerNormalization': LayerNormalization,
+    'PositionEmbedding': PositionEmbedding,
+    'FeedForward': FeedForward,
+    'ConditionalRandomField': ConditionalRandomField,
 }
 
 tf.keras.utils.get_custom_objects().update(custom_objects)
