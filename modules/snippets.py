@@ -13,6 +13,16 @@ if not is_py2:
     basestring = str
 
 
+def to_array(*args):
+    """批量转numpy的array
+    """
+    results = [np.array(a) for a in args]
+    if len(args) == 1:
+        return results[0]
+    else:
+        return results
+
+
 def is_string(s):
     """判断是否为字符串
     """
@@ -180,7 +190,7 @@ class DataGenerator:
                     yield warps(names, d)
 
             types = warps(names, types)
-            shapes = warps(names. shapes)
+            shapes = warps(names, shapes)
 
         if padded_batch:
             dataset = tf.data.Dataset.from_generator(
