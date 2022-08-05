@@ -24,10 +24,6 @@ class TestConcatenate1D(unittest.TestCase):
         print(c1)
 
 
-class TestBERT(unittest.TestCase):
-    pass
-
-
 
 
 

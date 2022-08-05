@@ -367,6 +367,7 @@ class Tokenizer(TokenizerBase):
 
     def rematch(self, text, tokens):
         """给出原始text和tokenize后tokens之间的映射关系
+        TODO(测试)
         """
         if self._do_lower_case:
             text = text.lower()
@@ -382,9 +383,12 @@ class Tokenizer(TokenizerBase):
                 if not (ord(c) == 0 or ord(c) == 0xfffd or self._is_control(c))
             ])
             normalized_text += ch
+            if len(ch) == 0:
+                print(i)
+                print(ch)
             char_mapping.extend([i] * len(ch))
+        print(char_mapping)
 
-        # 不清楚为什么这么麻烦
         text, token_mapping, offset = normalized_text, [], 0
         for token in tokens:
             if self._is_spcecial(token):
@@ -397,6 +401,11 @@ class Tokenizer(TokenizerBase):
                 offset = start
 
         return token_mapping
+
+
+
+
+
 
 
 if __name__ == '__main__':
