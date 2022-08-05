@@ -32,6 +32,7 @@ def test_model():
     print('crf output:\n', output)
 
     print('是否built：', model.built)
+
     model = Model(model.input, output)
     print('CRF transformer: \n', model.summary())
 
@@ -40,6 +41,7 @@ def test_model():
         optimizer=tf.optimizers.Adam(1e-5),
         metrics=[CRF.sparse_accuracy]
     )
+
     print('是否built：', model.built)
 
 
